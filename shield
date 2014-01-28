@@ -7,6 +7,8 @@ var httpProxy = require('./network_simulation/lib/proxy');
 var checkServer = require('./network_simulation/lib/check_server');
 var nopt = require('nopt');
 var url = require('url');
+var _   = require('underscore');
+var util = require('util');
 
 var RequestData = function (request, response, buffer) {
   this.request = request;
@@ -23,21 +25,59 @@ function rejectRequest(reqData) {
   reqData.response.end();
 }
 
+var ThrottledRequestQueue = function() {
+  var self = this;
+  this.requests = [];
+  this.ipRequestTimes = {};
+
+  this.nextRequest = function() {
+    return self.requests.shift();
+  };
+
+  this.addRequest = function(request) {
+    var ipAddress = ipFromRequest(request),
+        now       = +new Date;
+    if (this.ipRequestTimes[ipAddress] && (( now - this.ipRequestTimes[ipAddress] ) < 10)) {
+      rejectRequest(request);
+    } else {
+      self.requests.push(request);
+    }
+    this.ipRequestTimes[ipAddress] = now;
+
+    return;
+  };
+};
+
 var Queue = function (proxies, parameters) {
+  var self = this;
   this.proxies = proxies;
+  this.availableProxies = this.proxies.slice();
   this.parameters = parameters;
-};
-Queue.prototype.takeRequest = function (reqData) {
-  // Reject traffic as necessary:
-  // if (currently_blacklisted(ipFromRequest(reqData))) {
-  //   rejectRequest(reqData);
-  //   return;
-  // }
-  // Otherwise proxy it through:
-  this.proxies[0].proxyRequest(reqData.request, reqData.response, reqData.buffer);
-};
-Queue.prototype.requestFinished = function () {
-  return;
+  this.requestQueue = new ThrottledRequestQueue;
+
+  this.requestFinished = function () {
+    return;
+  };
+
+ this.assignWork = function(proxy) {
+    var request = self.requestQueue.nextRequest();
+    if (request) {
+      proxy.proxyRequest(request.request, request.response, request.buffer);
+    }
+  };
+
+  this.takeRequest = function (reqData) {
+    self.requestQueue.addRequest(reqData);
+
+    if (self.availableProxies.length > 0) {
+      var proxy = self.availableProxies.pop();
+      self.assignWork(proxy);
+    }
+  };
+
+  this.push = function(proxy) {
+    self.assignWork(proxy);
+  }
 };
 
 function checkBackends(targets, path, response) {
@@ -71,19 +111,21 @@ function main() {
       target,
       proxies = [],
       proxy,
-      i;
+      i, j;
 
   for (i = 0; i < outPorts.length; i++) {
     target = {'host': 'localhost', 'port': outPorts[i]};
     targets.push(target);
-    proxy = new httpProxy.HttpProxy({'target': target});
-    proxy.identifier = i;
-    proxies.push(proxy);
+    for (j = 0; j < 2; j++) {
+      proxy = new httpProxy.HttpProxy({'target': target});
+      proxies.push(proxy);
+    }
   }
 
   var queue = new Queue(proxies, {});
   for (i = 0; i < proxies.length; i++) {
     proxy = proxies[i];
+    proxy.queue = queue;
     proxy.on("end", queue.requestFinished);
   }
 
