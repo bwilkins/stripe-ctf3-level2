@@ -25,59 +25,57 @@ function rejectRequest(reqData) {
   reqData.response.end();
 }
 
-var ThrottledRequestQueue = function() {
+var ThrottleStrategy = function() {
   var self = this;
-  this.requests = [];
   this.ipRequestTimes = {};
 
-  this.nextRequest = function() {
-    return self.requests.shift();
-  };
-
-  this.addRequest = function(request) {
+  this.throttleRequest = function(request) {
     var ipAddress = ipFromRequest(request),
-        now       = +new Date;
-    if (this.ipRequestTimes[ipAddress] && (( now - this.ipRequestTimes[ipAddress] ) < 10)) {
-      rejectRequest(request);
-    } else {
-      self.requests.push(request);
+        now       = +new Date,
+        throttle  = false;
+    if (this.ipRequestTimes[ipAddress] && (( now - this.ipRequestTimes[ipAddress] ) < 20)) {
+      throttle = true;
     }
     this.ipRequestTimes[ipAddress] = now;
 
-    return;
+    return throttle;
   };
+};
+
+var RoundRobinProxyStrategy = function (proxies) {
+  this.proxies = proxies;
+  this.position = 0;
+
+  this.selectProxy = function() {
+    var proxy = this.proxies[this.position];
+    this.position = (this.position < this.proxies.length-1) ? this.position + 1 : 0;
+
+    return proxy;
+  }
 };
 
 var Queue = function (proxies, parameters) {
   var self = this;
   this.proxies = proxies;
-  this.availableProxies = this.proxies.slice();
   this.parameters = parameters;
-  this.requestQueue = new ThrottledRequestQueue;
+  this.throttler = new ThrottleStrategy;
+  this.proxySelector = new RoundRobinProxyStrategy(proxies);
 
   this.requestFinished = function () {
     return;
   };
 
- this.assignWork = function(proxy) {
-    var request = self.requestQueue.nextRequest();
-    if (request) {
-      proxy.proxyRequest(request.request, request.response, request.buffer);
-    }
+  this.selectProxy = function() {
+    return self.proxySelector.selectProxy(self.proxies);
   };
 
   this.takeRequest = function (reqData) {
-    self.requestQueue.addRequest(reqData);
-
-    if (self.availableProxies.length > 0) {
-      var proxy = self.availableProxies.pop();
-      self.assignWork(proxy);
+    if (self.throttler.throttleRequest(reqData)) {
+      rejectRequest(reqData);
+      return;
     }
+    self.selectProxy().proxyRequest(reqData.request, reqData.response, reqData.buffer);
   };
-
-  this.push = function(proxy) {
-    self.assignWork(proxy);
-  }
 };
 
 function checkBackends(targets, path, response) {

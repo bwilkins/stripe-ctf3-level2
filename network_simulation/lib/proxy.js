@@ -37,7 +37,6 @@ var HttpProxy = exports.HttpProxy = function(options) {
   this.target = options.target;
   this.enable  = {};
   this.timeout = options.timeout;
-  this.queue = options.queue;
 }
 
 util.inherits(HttpProxy, events.EventEmitter);
@@ -251,7 +250,6 @@ HttpProxy.prototype.proxyRequest = function (req, res, buffer) {
         catch (ex) { console.error("res.end error: %s", ex.message) }
 
         // Emit the `end` event now that we have completed proxying
-        self.queue.push(self);
         self.emit('end', req, res, response);
       }
     });
